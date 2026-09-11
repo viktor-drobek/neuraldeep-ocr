@@ -1,5 +1,4 @@
 ---
-author: kimi2.6 & qwen3.8 27b (published by viktor-drobek)
 name: neuraldeep-ocr
 description: >
   OCR and document extraction skill powered by NeuralDeep OCR API.
