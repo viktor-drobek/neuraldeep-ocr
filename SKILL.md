@@ -10,7 +10,6 @@ description: >
 metadata:
   neuraldeep:
     emoji: "📄"
-    requires_file: "~/.coddy/providers/neuraldeep/neuraldeep-auth.json"
     base_url: "https://api.neuraldeep.ru/v1/ocr"
     endpoints:
       - /v1/ocr/extract
@@ -32,23 +31,20 @@ Use this skill whenever the user needs:
 
 ## Requirements
 
-### Primary key source
-```bash
-~/.coddy/providers/neuraldeep/neuraldeep-auth.json
-```
-Extract: `jq -r '.api_key' ~/.coddy/providers/neuraldeep/neuraldeep-auth.json`
+Python 3.10+ is sufficient; the helper uses only the standard library.
+Run commands from this skill's directory. No `curl`, `jq`, or `httpx` is required.
 
-### Fallback
-```bash
-${NEURALDEEP_API_KEY}
-```
+The helper first reads `api_key` from
+`${CODDY_HOME:-~/.coddy}/providers/neuraldeep/neuraldeep-auth.json`, then falls
+back to `NEURALDEEP_API_KEY` for missing, malformed, null, or empty file values.
+It never prints the key. If neither source works, it returns `blocked`; use
+`coddy providers login neuraldeep` or supply the environment variable securely.
+Do not use `jq -r .api_key` as a presence check: JSON null becomes the string `null`.
 
-### Resolve key helper
-```bash
-ND_KEY=$(jq -r '.api_key' ~/.coddy/providers/neuraldeep/neuraldeep-auth.json 2>/dev/null)
-[ -z "$ND_KEY" ] && ND_KEY="${NEURALDEEP_API_KEY}"
-```
-If empty → `BLOCKED` + suggest `coddy providers login neuraldeep`.
+Read [Starter and Relay safety](STARTER_RELAY.md) before submitting work.
+Every billed operation must pass the helper's live subscription, public-price,
+and service-quota checks. A chat `decision.can_request=false` is not a service
+quota decision. State files and artifacts are private runtime data, not repo files.
 
 ## Base URL
 
@@ -62,29 +58,22 @@ https://api.neuraldeep.ru/v1/ocr
 
 Upload a file and get a `job_id`. Processing is **asynchronous**.
 
-### curl example (fast, default)
+### Guarded helper example (fast, default)
 ```bash
-ND_KEY=$(jq -r '.api_key' ~/.coddy/providers/neuraldeep/neuraldeep-auth.json 2>/dev/null || echo "${NEURALDEEP_API_KEY}")
-curl -sS -X POST "https://api.neuraldeep.ru/v1/ocr/extract" \
-  -H "Authorization: Bearer ${ND_KEY}" \
-  -F "file=@invoice.pdf"
+# This example assumes invoice.pdf has exactly one page. Verify locally first.
+python3 scripts/client.py run extract --file invoice.pdf --pages 1 --state fast-state.json --output fast-result.json
 ```
 
-### curl example (pro profile — higher quality)
+### Guarded helper example (pro profile — higher quality)
 ```bash
-curl -sS -X POST "https://api.neuraldeep.ru/v1/ocr/extract" \
-  -H "Authorization: Bearer ${ND_KEY}" \
-  -F "file=@invoice.pdf" \
-  -F "model_profile=pro"
+# pro charges two quota pages per input page.
+python3 scripts/client.py run extract --file invoice.pdf --pages 1 --profile pro --state pro-state.json --output pro-result.json
 ```
 
-### curl example (page range)
-```bash
-curl -sS -X POST "https://api.neuraldeep.ru/v1/ocr/extract" \
-  -H "Authorization: Bearer ${ND_KEY}" \
-  -F "file=@report.pdf" \
-  -F 'page_ranges=[{"start":1,"end":5}]'
-```
+### Guarded helper example (page range)
+The API accepts `page_ranges`; the minimal helper does not yet encode this field.
+Select the required pages locally into a separate PDF, verify its page count,
+and pass that file with `--pages`. Never guess a PDF's page count.
 
 **Supported formats:** PDF, PNG, JPG, WEBP, BMP, TIFF
 
@@ -104,14 +93,12 @@ curl -sS -X POST "https://api.neuraldeep.ru/v1/ocr/extract" \
 ## 2. Poll Job Status
 
 ```bash
-ND_KEY=$(jq -r '.api_key' ~/.coddy/providers/neuraldeep/neuraldeep-auth.json 2>/dev/null || echo "${NEURALDEEP_API_KEY}")
-JID="job_abc123"
-curl -sS "https://api.neuraldeep.ru/v1/ocr/jobs/${JID}" \
-  -H "Authorization: Bearer ${ND_KEY}"
+# Only after a prior run timed out or had a transient polling error:
+python3 scripts/client.py resume --state fast-state.json --output fast-result.json --timeout 300
 ```
 
 **Response:**
-```json
+```text
 {"id": "job_abc123", "status": "pending | processing | completed | failed", ...}
 ```
 
@@ -122,25 +109,19 @@ curl -sS "https://api.neuraldeep.ru/v1/ocr/jobs/${JID}" \
 ## 3. Fetch Result
 
 ### Default JSON
-```bash
-curl -sS "https://api.neuraldeep.ru/v1/ocr/jobs/job_abc123/result" \
-  -H "Authorization: Bearer ${ND_KEY}"
-```
+The API endpoint is `GET /v1/ocr/jobs/{id}/result`. Fetch only after confirmed
+completion. The helper saves the markdown-format JSON response as an artifact.
 
 ### Markdown format
-```bash
-curl -sS "https://api.neuraldeep.ru/v1/ocr/jobs/job_abc123/result?format=markdown" \
-  -H "Authorization: Bearer ${ND_KEY}"
-```
+`GET /v1/ocr/jobs/{id}/result?format=markdown` is the helper's result endpoint.
+Read its `content` field only after the helper reports `completed`.
 
 ### Text format
-```bash
-curl -sS "https://api.neuraldeep.ru/v1/ocr/jobs/job_abc123/result?format=text" \
-  -H "Authorization: Bearer ${ND_KEY}"
-```
+The API also offers `GET /v1/ocr/jobs/{id}/result?format=text`; custom callers
+must use the same bounded polling and error handling before fetching it.
 
 **Response shape (JSON):**
-```json
+```text
 {
   "id": "job_abc123",
   "content": "Extracted markdown text...",
@@ -155,62 +136,36 @@ curl -sS "https://api.neuraldeep.ru/v1/ocr/jobs/job_abc123/result?format=text" \
 ## 4. Check Remaining OCR Balance
 
 ```bash
-curl -sS "https://api.neuraldeep.ru/v1/ocr/balance" \
-  -H "Authorization: Bearer ${ND_KEY}"
+python3 scripts/client.py check extract --pages 1 --profile pro
 ```
 
-**Response (проверено):**
-```json
-{"entity_code": "scan_page", "remaining_pages": 1500, "total_affordable_pages": 1500,
- "monthly_pages": {"total": 1500, "allocated": 0, "remaining": 1500},
- "daily_pages": {"total": 100, "allocated": 0, "remaining": 100},
- "tier": "starter"}
-```
+**Verified quota structure:** `GET /v1/ocr/balance` returns `tier`,
+`daily_pages.remaining`, and `monthly_pages.remaining`, alongside aggregate
+page fields. The helper requires both windows to cover the verified input
+page count, doubled for `pro`. Do not use aggregate affordable pages as a
+substitute for the daily and monthly subscription buckets.
 
 ---
 
 ## Complete Python Example
 
 ```python
-import time, httpx, json, os
-
-BASE = "https://api.neuraldeep.ru/v1"
-KEY = json.load(open(os.path.expanduser(
-    "~/.coddy/providers/neuraldeep/neuraldeep-auth.json"
-)))["api_key"]
-H = {"Authorization": f"Bearer {KEY}"}
-
-# 1. Upload
-with open("invoice.pdf", "rb") as f:
-    job = httpx.post(
-        f"{BASE}/ocr/extract",
-        headers=H,
-        files={"file": ("invoice.pdf", f, "application/pdf")},
-        data={"model_profile": "pro"},
-    ).json()
-
-jid = job["id"]
-print("pages:", job["page_count"], "charged:", job["scan_pages_charged"])
-
-# 2. Poll
-for _ in range(300):
-    st = httpx.get(f"{BASE}/ocr/jobs/{jid}", headers=H).json()
-    if st["status"] == "completed":
-        break
-    if st["status"] == "failed":
-        raise RuntimeError("OCR failed")
-    time.sleep(1)
-
-# 3. Fetch markdown
-res = httpx.get(f"{BASE}/ocr/jobs/{jid}/result", params={"format": "markdown"}, headers=H).json()
-print(res["content"])
+import json
+from pathlib import Path
+import subprocess
+# Verify that this input has one page before running.
+subprocess.run(["python3", "scripts/client.py", "run", "extract", "--file", "invoice.pdf",
+                "--pages", "1", "--profile", "pro", "--state", "python-ocr-state.json",
+                "--output", "ocr-result.json", "--timeout", "300"], check=True)
+data = json.loads(Path("ocr-result.json").read_text())
+print(data["content"])
 ```
 
 ---
 
 ## Workflow Summary
 
-1. Resolve key
+1. Resolve key and pass the live Starter guard
 2. **POST `/ocr/extract`** with file (and optional `model_profile=pro`, `page_ranges`) → get `job_id`
 3. **Poll `/ocr/jobs/{id}`** until `status == completed`
 4. **GET `/ocr/jobs/{id}/result`** (JSON/md/text)
@@ -227,10 +182,10 @@ print(res["content"])
 - `401` — invalid key
 - `429` — page quota exhausted
 - `400` — unsupported file format or malformed page_ranges
-- `500`/`503` — transient error → retry after delay
+- `500`/`503` — stop; reconcile an uncertain submission instead of retrying it
 
 ## Privacy & Security
 
 - Do not upload documents containing third-party PII without user consent.
-- OCR processing happens on NeuralDeep infrastructure (data does not leave the provider).
+- OCR inputs leave the local machine and are processed on provider infrastructure; review provider privacy terms before upload.
 - Anonymize before upload when possible (see PII Guard skill `/v1/pii/anonymize`).
