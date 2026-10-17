@@ -1,10 +1,16 @@
+import email.message
+import hashlib
 import importlib.util
+import io
 import json
 import os
 from pathlib import Path
+import sys
 import tempfile
 import unittest
 from unittest.mock import Mock, patch
+import urllib.request
+import urllib.response
 
 SPEC = importlib.util.spec_from_file_location("client", Path(__file__).parents[1] / "scripts" / "client.py")
 client = importlib.util.module_from_spec(SPEC)
@@ -101,6 +107,15 @@ class SafetyTests(unittest.TestCase):
             self.assertNotIn("secret-fixture", str(raised.exception))
             self.assertEqual(opener.open.call_count, 1)
 
+    def test_http_error_response_is_closed(self):
+        from urllib.error import HTTPError
+        body = io.BytesIO(b"private-body-fixture")
+        opener = Mock()
+        opener.open.side_effect = HTTPError("https://example.com", 503, "Unavailable", {}, body)
+        with self.assertRaises(client.RequestError):
+            client.request("GET", client.HUB + "/limits", "secret-fixture", opener=opener)
+        self.assertTrue(body.closed)
+
     def test_durable_state_and_duplicate_prevention(self):
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "job.json"
@@ -108,8 +123,10 @@ class SafetyTests(unittest.TestCase):
             state["provider_job_id"] = "provider-fixture"
             client.save_state(path, state)
             self.assertEqual(json.loads(path.read_text())["provider_job_id"], "provider-fixture")
-            with self.assertRaises(FileExistsError):
+            with self.assertRaises(client.Blocked) as raised:
                 client.new_state(path, "task-fixture", "images")
+            self.assertIn("State file already exists", str(raised.exception))
+            self.assertEqual(json.loads(path.read_text())["provider_job_id"], "provider-fixture")
 
     def test_deadline_rechecked_before_download(self):
         get = Mock(return_value={"status": "completed"})
@@ -272,6 +289,143 @@ class SafetyTests(unittest.TestCase):
             self.assertEqual(artifact["sha256"], "9f86d081884c7d659a2feaa0c55ad015a3bf4f1b2b0b822cd15d6c15b0f00a08")
             self.assertEqual(artifact["provenance"]["endpoint"], "/result")
             self.assertEqual(artifact["provenance"]["trust"], "untrusted_data")
+
+
+    def test_ocr_run_workflow_uploads_profile_and_fetches_markdown(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.object(client, "SERVICE", "ocr"), patch.object(client, "resolve_key", return_value="fixture"), patch.object(client, "preflight", return_value={"units_required": 2}) as pre:
+            args = self.args(tmp)
+            args.operation, args.profile, args.file = "extract", "pro", str(Path(tmp) / "invoice.pdf")
+            Path(args.file).write_bytes(b"%PDF-fixture")
+            body = json.dumps({"id": "job_abc123", "content": "recognized text"}).encode()
+            responses = [{"id": "job_abc123", "page_count": 1, "scan_pages_charged": 2},
+                         {"status": "processing"}, {"status": "completed"}, (body, "application/json")]
+            with patch.object(client, "request", side_effect=responses) as req, patch.object(client.time, "sleep") as sleep:
+                result = client.execute(args)
+            self.assertEqual(result["status"], "completed")
+            self.assertEqual(result["provider_job_id"], "job_abc123")
+            self.assertEqual(pre.call_args.args, ("ocr", "extract", "fixture", 2))
+            method, url, _, upload, content_type = req.call_args_list[0].args
+            self.assertEqual((method, url), ("POST", client.HUB + "/ocr/extract"))
+            self.assertTrue(content_type.startswith("multipart/form-data; boundary="))
+            self.assertIn(b'name="model_profile"\r\n\r\npro\r\n', upload)
+            self.assertIn(b'name="file"; filename="upload.pdf"', upload)
+            self.assertIn(b"%PDF-fixture", upload)
+            self.assertNotIn(b"invoice", upload)
+            job = client.HUB + "/ocr/jobs/job_abc123"
+            self.assertEqual([c.args[1] for c in req.call_args_list[1:]], [job, job, job + "/result?format=markdown"])
+            self.assertTrue(req.call_args_list[-1].kwargs["raw"])
+            sleep.assert_called_once()
+            self.assertEqual(Path(args.output).read_bytes(), body)
+            artifact = result["artifacts"][0]
+            self.assertEqual(artifact["sha256"], hashlib.sha256(body).hexdigest())
+            self.assertEqual(artifact["provenance"]["endpoint"], job + "/result?format=markdown")
+            self.assertEqual(json.loads(Path(args.state).read_text())["status"], "completed")
+
+    def test_existing_state_path_is_refused_with_clear_reason(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.object(client, "resolve_key", return_value="fixture"):
+            state = Path(tmp) / "state.json"
+            state.write_text('{"provider_job_id": "job-fixture"}')
+            paths = ["--state", str(state), "--output", str(Path(tmp) / "result.json")]
+            for argv in (["run", "extract", "--pages", "1"], ["resume", "--job-id", "job-other"]):
+                with self.subTest(argv=argv), patch.object(client, "request") as req, patch.object(sys, "argv", ["client.py", *argv, *paths]), patch("sys.stdout", new_callable=io.StringIO) as out:
+                    self.assertEqual(client.main(), 1)
+                result = json.loads(out.getvalue())
+                self.assertEqual(result["status"], "blocked")
+                self.assertIn("State file already exists", result["errors"][0])
+                req.assert_not_called()
+                self.assertEqual(state.read_text(), '{"provider_job_id": "job-fixture"}')
+
+    def write_state(self, path, **fields):
+        state = {**client.state_template("task-fixture", "ocr"), "provider_job_id": "job_abc123", "status": "timed_out", **fields}
+        Path(path).write_text(json.dumps(state))
+
+    def test_resume_existing_state_polls_same_job_without_submitting(self):
+        for prior in ("submitted", "timed_out", "poll_error"):
+            with self.subTest(prior=prior), tempfile.TemporaryDirectory() as tmp, patch.object(client, "SERVICE", "ocr"), patch.object(client, "resolve_key", return_value="fixture"), patch.object(client, "preflight") as pre:
+                args = self.args(tmp)
+                args.command, args.operation = "resume", "extract"
+                self.write_state(args.state, status=prior, errors=["Polling deadline reached"])
+                body = json.dumps({"content": "recognized text"}).encode()
+                with patch.object(client, "request", side_effect=[{"status": "completed"}, (body, "application/json")]) as req:
+                    result = client.execute(args)
+                self.assertEqual(result["status"], "completed")
+                self.assertEqual(result["provider_job_id"], "job_abc123")
+                self.assertEqual([c.args[:2] for c in req.call_args_list],
+                                 [("GET", client.HUB + "/ocr/jobs/job_abc123"),
+                                  ("GET", client.HUB + "/ocr/jobs/job_abc123/result?format=markdown")])
+                pre.assert_not_called()
+                saved = json.loads(Path(args.state).read_text())
+                self.assertEqual(saved["status"], "completed")
+                self.assertEqual(saved["errors"], ["Polling deadline reached"])
+                self.assertEqual(Path(args.output).read_bytes(), body)
+
+    def test_resume_refuses_non_resumable_or_foreign_state(self):
+        cases = [{"status": s} for s in ("reconciliation_required", "failed", "completed", "blocked")] + [{"service": "images"}]
+        for fields in cases:
+            with self.subTest(**fields), tempfile.TemporaryDirectory() as tmp, patch.object(client, "SERVICE", "ocr"), patch.object(client, "resolve_key", return_value="fixture"):
+                args = self.args(tmp)
+                args.command = "resume"
+                self.write_state(args.state, **fields)
+                before = Path(args.state).read_bytes()
+                with patch.object(client, "request") as req, self.assertRaises(client.Blocked):
+                    client.execute(args)
+                req.assert_not_called()
+                self.assertEqual(Path(args.state).read_bytes(), before)
+                self.assertFalse(Path(args.output).exists())
+
+
+class FakeHTTPS(urllib.request.HTTPSHandler):
+    """Offline HTTPS transport that records requests and replays canned responses."""
+
+    def __init__(self, *responses):
+        super().__init__()
+        self.responses, self.seen = list(responses), []
+
+    def https_open(self, req):
+        self.seen.append(req)
+        code, headers, body = self.responses.pop(0)
+        message = email.message.Message()
+        for name, value in headers.items():
+            message[name] = value
+        response = urllib.response.addinfourl(io.BytesIO(body), message, req.full_url, code)
+        response.msg = "fixture"
+        return response
+
+
+class RequestTests(unittest.TestCase):
+    def transport(self, *responses):
+        # Keep the client's own opener construction, only swapping the network transport.
+        fake = FakeHTTPS(*responses)
+        return fake, patch.object(client, "build_opener", side_effect=lambda *h: urllib.request.build_opener(*h, fake))
+
+    def test_unapproved_origins_are_blocked_before_any_connection(self):
+        for url in ("http://api.neuraldeep.ru/v1/limits", "https://evil.example/v1/limits",
+                    "https://api.neuraldeep.ru.evil.example/v1/limits", "https://api.neuraldeep.ru:8443/v1/limits",
+                    "https://user@api.neuraldeep.ru/v1/limits"):
+            opener = Mock()
+            with self.subTest(url=url), self.assertRaises(client.Blocked):
+                client.request("GET", url, "secret-fixture", opener=opener)
+            opener.open.assert_not_called()
+
+    def test_redirects_are_not_followed(self):
+        for method, code in (("GET", 301), ("GET", 302), ("POST", 303), ("GET", 307), ("POST", 308)):
+            fake, transport = self.transport((code, {"Location": "https://neuraldeep.ru/elsewhere"}, b""))
+            with self.subTest(method=method, code=code), transport, self.assertRaises(client.RequestError) as raised:
+                client.request(method, client.HUB + "/ocr/extract", "secret-fixture", b"{}" if method == "POST" else None)
+            self.assertIn(f"HTTP {code}", str(raised.exception))
+            self.assertEqual([r.full_url for r in fake.seen], [client.HUB + "/ocr/extract"])
+
+    def test_bearer_only_sent_to_authenticated_endpoints(self):
+        ok = (200, {"Content-Type": "application/json; charset=utf-8"}, b'{"ok": true}')
+        fake, transport = self.transport(ok, ok)
+        with transport:
+            self.assertEqual(client.request("GET", client.PRICES, "secret-fixture"), {"ok": True})
+            self.assertEqual(client.request("GET", client.HUB + "/limits", "secret-fixture", raw=True),
+                             (b'{"ok": true}', "application/json"))
+        prices, limits = fake.seen
+        self.assertFalse(prices.has_header("Authorization"))
+        self.assertNotIn("secret-fixture", str(prices.header_items()))
+        self.assertEqual(limits.get_header("Authorization"), "Bearer secret-fixture")
 
 
 if __name__ == "__main__":
