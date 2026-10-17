@@ -52,6 +52,20 @@ an unknown status to `completed`. Mutations of the failure set, the status check
 and the sanitising each fail their own test. **48 tests passed**, both normally
 and with `LC_ALL=C PYTHONUTF8=0`, with no EncodingWarnings.
 
+## Transcription models
+
+The shared helper now knows three speech-to-text models for the `whisper`
+service: `gigaam-v3` (the default), `whisper-1` and `whisper-podlodka-turbo`,
+chosen with `--model`. Each has its own public price ID; the guard checks the
+chosen model's row and its block names the model. `--model` is refused for the
+other services and for unknown models (exit 2). Five shared tests were added
+first; four failed and the fifth guards the new flag. Moving the default from
+`whisper-1` to `gigaam-v3` updated the tests pinned to it. Mutations of the
+default, the model check and the per-model price ID each fail their own test.
+A live read-only `check` (2026-10-17) blocked each model at the quota step, so
+all three price rows are present and non-premium. **53 tests passed**, both
+normally and with `LC_ALL=C PYTHONUTF8=0`.
+
 ## Final results
 
 - `python3 -B -m unittest discover -s tests`: **22 tests passed** in this repo.
