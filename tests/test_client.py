@@ -240,6 +240,32 @@ class SafetyTests(unittest.TestCase):
         with self.assertRaises(client.RequestError):
             client.validate_result("images", (b"not PNG", "image/png"))
 
+    def transcript(self):
+        return json.dumps({"detected_language": "en", "duration": 2.5,
+                           "segments": [{"speaker": "SPEAKER_00", "text": "hello", "start": 0, "end": 2.5}]}).encode()
+
+    def test_submission_reads_service_specific_job_id_field(self):
+        cases = [("speechcore", "upload", "task_id", {"status": "completed"}, (self.transcript(), "application/json")),
+                 ("ocr", "extract", "id", {"status": "completed"}, (b'{"content": "text"}', "application/json")),
+                 ("images", "generate", "task_uid", {"status": "finished"}, (b"\x89PNG\r\n\x1a\n" + b"0" * 24, "image/png"))]
+        for service, operation, field, status, result_body in cases:
+            with self.subTest(service=service), tempfile.TemporaryDirectory() as tmp, patch.object(client, "SERVICE", service), patch.object(client, "resolve_key", return_value="fixture"), patch.object(client, "preflight", return_value={}), patch.object(client, "submission", return_value=("POST", "https://api.neuraldeep.ru/v1/x", b"", "application/json")):
+                args = self.args(tmp)
+                args.operation = operation
+                with patch.object(client, "request", side_effect=[{field: "job-fixture"}, status, result_body]):
+                    result = client.execute(args)
+                self.assertEqual(result["status"], "completed")
+                self.assertEqual(result["provider_job_id"], "job-fixture")
+        # A field belonging to another service is not accepted as the provider ID.
+        with tempfile.TemporaryDirectory() as tmp, patch.object(client, "SERVICE", "speechcore"), patch.object(client, "resolve_key", return_value="fixture"), patch.object(client, "preflight", return_value={}), patch.object(client, "submission", return_value=("POST", client.SPEECH + "/upload", b"", "application/json")):
+            args = self.args(tmp)
+            args.operation = "upload"
+            with patch.object(client, "request", return_value={"id": "job-fixture"}) as req:
+                result = client.execute(args)
+            self.assertEqual(result["status"], "reconciliation_required")
+            self.assertIsNone(result["provider_job_id"])
+            self.assertEqual(req.call_count, 1)
+
     def test_artifact_has_hash_and_provenance(self):
         with tempfile.TemporaryDirectory() as tmp:
             artifact = client.save_artifact(Path(tmp) / "result.bin", b"test", "/result")
