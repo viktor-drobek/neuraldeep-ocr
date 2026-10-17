@@ -79,8 +79,10 @@ A later regression test showed that `request()` left a caught `HTTPError`
 response open until garbage collection (a `ResourceWarning` on Python 3.14).
 It failed first; the handler now closes the error before raising `RequestError`.
 
-- `python3 -B -m unittest discover -s tests`: **32 tests passed** in this repo, including the per-service job-ID test from `main`.
-  These additions diverge from the shared 22-test suite in the other service repos.
+- `python3 -B -m unittest discover -s tests`: **32 tests passed** in this repo at that
+  point, including the per-service job-ID test from `main`. The four service repos
+  no longer run one identical suite: fixes are ported between them individually,
+  so check each repo's own test count rather than assuming they match.
 
 Ported from neuraldeep-images: `multipart()` now keeps only an alphanumeric
 file extension (`\.[A-Za-z0-9]{1,10}`) in the `filename=` header, so local
