@@ -23,7 +23,7 @@ No billed endpoint was called during development or verification. Publication is
   insufficient service quota, independent chat decision, double-page OCR pro cost.
 - HTTP failures and ambiguous submissions with no retry or secret disclosure.
 - Durable provider ID before polling; duplicate state creation refused.
-- Failed/unknown statuses and deadline exhaustion never fetch results.
+- Failed statuses and deadline exhaustion never fetch results; unknown statuses keep polling.
 - SHA-256 artifact provenance and untrusted-data labeling.
 - Python and Bash fenced examples parsed without execution.
 
@@ -36,6 +36,21 @@ documentation; the tests exercise mocked responses, not a claim of live success.
 A further regression test exposed a CLI catch-all that hid sanitized block
 reasons; it was fixed. A mocked workflow test covers all five image operations
 as asynchronous jobs, including multipart processing rather than direct PNG POSTs.
+
+## Unknown polling status
+
+A live run on 2026-10-17 (four agents, real API) found that every OCR `run extract`
+ended `failed` with "returned an unknown status", although the job had finished:
+a later `GET /v1/ocr/jobs/{id}` said `completed`, and `resume` fetched the text.
+`poll()` treated any status outside its fixed in-progress list as a failure.
+
+Six tests were added first and failed: an unknown intermediate status now keeps
+polling, an unknown status until the deadline ends `timed_out` naming it (only a
+plain word is echoed), explicit failure statuses still stop at once, a response
+without a status is a resumable `poll_error`, and a mocked OCR run passes through
+an unknown status to `completed`. Mutations of the failure set, the status check
+and the sanitising each fail their own test. **48 tests passed**, both normally
+and with `LC_ALL=C PYTHONUTF8=0`, with no EncodingWarnings.
 
 ## Final results
 
