@@ -25,6 +25,9 @@ OPERATIONS = {"search": ("web", "tg", "crawl"), "ocr": ("extract",),
               "speechcore": ("upload",)}
 # Field holding the provider job ID in each async submission response.
 JOB_ID_FIELDS = {"images": "task_uid", "ocr": "id", "speechcore": "task_id"}
+# Documented in SKILL.md; tests keep the two in sync.
+POLL_INTERVAL = 2
+DEFAULT_TIMEOUT = 120
 
 
 class Blocked(RuntimeError):
@@ -79,6 +82,7 @@ def request(method, url, key, body=None, content_type="application/json", *, tim
             media_type = response.headers.get("Content-Type", "").split(";", 1)[0].strip().lower()
         return (data, media_type) if raw else json.loads(data)
     except HTTPError as error:
+        error.close()
         raise RequestError(f"HTTP {error.code}; no automatic retry") from None
     except (URLError, TimeoutError, OSError, ValueError, HTTPException):
         raise RequestError("Transport or response error; no automatic retry") from None
@@ -165,7 +169,10 @@ def state_template(task_id, service):
 
 
 def new_state(path, task_id, service):
-    fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    try:
+        fd = os.open(path, os.O_CREAT | os.O_EXCL | os.O_WRONLY, 0o600)
+    except FileExistsError:
+        raise Blocked("State file already exists; keep it for reconciliation and choose a new private state path") from None
     os.close(fd)
     state = state_template(task_id, service)
     save_state(path, state)
@@ -216,7 +223,7 @@ def validate_result(service, response):
     return data
 
 
-def poll(get, status_url, result_url, success, *, timeout=120, interval=2):
+def poll(get, status_url, result_url, success, *, timeout=DEFAULT_TIMEOUT, interval=POLL_INTERVAL):
     deadline = time.monotonic() + timeout
     while True:
         remaining = deadline - time.monotonic()
@@ -358,7 +365,7 @@ def main():
     parser.add_argument("--output", default="result.bin")
     parser.add_argument("--task-id", default="standalone")
     parser.add_argument("--job-id", help="Attach an existing provider job for read-only resume")
-    parser.add_argument("--timeout", type=float, default=120)
+    parser.add_argument("--timeout", type=float, default=DEFAULT_TIMEOUT, help="Polling deadline in seconds")
     args = parser.parse_args()
     if not math.isfinite(args.timeout) or args.timeout <= 0:
         parser.error("--timeout must be finite and positive")
