@@ -131,3 +131,17 @@ that the hand-edited state file is left byte-for-byte unchanged. Moving the
 overwrite that state while the old test still passed; with the new assertion,
 that mutation fails all three statuses. `scripts/client.py` is unchanged; the
 suite is still **38 tests**.
+
+## whisper-1 service, blocked
+
+Ported from neuraldeep-whisper-1 (36d8bc4) so the shared helper knows every
+service. whisper-1 is billed per minute and has no verified remaining-quota
+endpoint, so, like SpeechCore uploads, it is blocked in `guard()` and
+`submission()`; its public price ID is `whisper-1`, and it is listed as
+synchronous. `test_whisper_is_blocked_without_verified_quota` failed first: the
+missing `OPERATIONS` entry surfaced as the generic "Unrecognized ... schema"
+block instead of the whisper-1 reason. `scripts/client.py` now matches
+neuraldeep-whisper-1 apart from `SERVICE`. The `SYNCHRONOUS` entry and the
+`submission()` block are not exercised by a test yet. **39 tests passed**, both
+normally and with `LC_ALL=C PYTHONUTF8=0`, with no `EncodingWarning` under
+`-X warn_default_encoding`.
