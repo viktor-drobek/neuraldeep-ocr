@@ -38,11 +38,11 @@ class SafetyTests(unittest.TestCase):
             p.parent.mkdir(parents=True)
             self.assertEqual(client.resolve_key(), "env-fixture")
             for value in (None, "", "  ", "null", 1):
-                p.write_text(json.dumps({"api_key": value}))
+                p.write_text(json.dumps({"api_key": value}), encoding="utf-8")
                 self.assertEqual(client.resolve_key(), "env-fixture")
-            p.write_text('{"api_key": "file-fixture"}')
+            p.write_text('{"api_key": "file-fixture"}', encoding="utf-8")
             self.assertEqual(client.resolve_key(), "file-fixture")
-            p.write_text('{}')
+            p.write_text('{}', encoding="utf-8")
             os.environ.pop("NEURALDEEP_API_KEY")
             with self.assertRaises(client.Blocked):
                 client.resolve_key()
@@ -123,11 +123,11 @@ class SafetyTests(unittest.TestCase):
             state = client.new_state(path, "task-fixture", "images")
             state["provider_job_id"] = "provider-fixture"
             client.save_state(path, state)
-            self.assertEqual(json.loads(path.read_text())["provider_job_id"], "provider-fixture")
+            self.assertEqual(json.loads(path.read_text(encoding="utf-8"))["provider_job_id"], "provider-fixture")
             with self.assertRaises(client.Blocked) as raised:
                 client.new_state(path, "task-fixture", "images")
             self.assertIn("State file already exists", str(raised.exception))
-            self.assertEqual(json.loads(path.read_text())["provider_job_id"], "provider-fixture")
+            self.assertEqual(json.loads(path.read_text(encoding="utf-8"))["provider_job_id"], "provider-fixture")
 
     def test_deadline_rechecked_before_download(self):
         get = Mock(return_value={"status": "completed"})
@@ -162,9 +162,9 @@ class SafetyTests(unittest.TestCase):
             args = self.args(tmp)
             def respond(method, url, *a, **kw):
                 if method == "POST":
-                    self.assertEqual(json.loads(Path(args.state).read_text())["status"], "reconciliation_required")
+                    self.assertEqual(json.loads(Path(args.state).read_text(encoding="utf-8"))["status"], "reconciliation_required")
                     return {"task_uid": "job-fixture"}
-                self.assertEqual(json.loads(Path(args.state).read_text())["provider_job_id"], "job-fixture")
+                self.assertEqual(json.loads(Path(args.state).read_text(encoding="utf-8"))["provider_job_id"], "job-fixture")
                 self.assertFalse(url.endswith("/result"))
                 return {"status": "failed"}
             with patch.object(client, "request", side_effect=respond) as req:
@@ -320,12 +320,12 @@ class SafetyTests(unittest.TestCase):
             artifact = result["artifacts"][0]
             self.assertEqual(artifact["sha256"], hashlib.sha256(body).hexdigest())
             self.assertEqual(artifact["provenance"]["endpoint"], job + "/result?format=markdown")
-            self.assertEqual(json.loads(Path(args.state).read_text())["status"], "completed")
+            self.assertEqual(json.loads(Path(args.state).read_text(encoding="utf-8"))["status"], "completed")
 
     def test_existing_state_path_is_refused_with_clear_reason(self):
         with tempfile.TemporaryDirectory() as tmp, patch.object(client, "resolve_key", return_value="fixture"):
             state = Path(tmp) / "state.json"
-            state.write_text('{"provider_job_id": "job-fixture"}')
+            state.write_text('{"provider_job_id": "job-fixture"}', encoding="utf-8")
             paths = ["--state", str(state), "--output", str(Path(tmp) / "result.json")]
             for argv in (["run", "extract", "--pages", "1"], ["resume", "--job-id", "job-other"]):
                 with self.subTest(argv=argv), patch.object(client, "request") as req, patch.object(sys, "argv", ["client.py", *argv, *paths]), patch("sys.stdout", new_callable=io.StringIO) as out:
@@ -334,11 +334,11 @@ class SafetyTests(unittest.TestCase):
                 self.assertEqual(result["status"], "blocked")
                 self.assertIn("State file already exists", result["errors"][0])
                 req.assert_not_called()
-                self.assertEqual(state.read_text(), '{"provider_job_id": "job-fixture"}')
+                self.assertEqual(state.read_text(encoding="utf-8"), '{"provider_job_id": "job-fixture"}')
 
     def write_state(self, path, **fields):
         state = {**client.state_template("task-fixture", "ocr"), "provider_job_id": "job_abc123", "status": "timed_out", **fields}
-        Path(path).write_text(json.dumps(state))
+        Path(path).write_text(json.dumps(state), encoding="utf-8")
 
     def test_resume_existing_state_polls_same_job_without_submitting(self):
         for prior in ("submitted", "timed_out", "poll_error"):
@@ -355,7 +355,7 @@ class SafetyTests(unittest.TestCase):
                                  [("GET", client.HUB + "/ocr/jobs/job_abc123"),
                                   ("GET", client.HUB + "/ocr/jobs/job_abc123/result?format=markdown")])
                 pre.assert_not_called()
-                saved = json.loads(Path(args.state).read_text())
+                saved = json.loads(Path(args.state).read_text(encoding="utf-8"))
                 self.assertEqual(saved["status"], "completed")
                 self.assertEqual(saved["errors"], ["Polling deadline reached"])
                 self.assertEqual(Path(args.output).read_bytes(), body)
@@ -442,6 +442,56 @@ class SafetyTests(unittest.TestCase):
             self.assertEqual((method, url), ("POST", client.HUB + "/images/upscale"))
             self.assertTrue(content_type.startswith("multipart/form-data; boundary="))
             self.assertIn(b'name="image"; filename="upload.png"', body)
+
+    def test_text_files_are_read_as_utf8_on_non_utf8_locales(self):
+        import subprocess
+        import sys
+        import textwrap
+        # Runs in a C locale, whose default text encoding is ASCII, so any
+        # read that relies on the locale fails on non-ASCII content.
+        script = textwrap.dedent('''
+            import importlib.util, json, sys
+            from argparse import Namespace
+            from pathlib import Path
+            from unittest.mock import patch
+            spec = importlib.util.spec_from_file_location("client", sys.argv[1])
+            client = importlib.util.module_from_spec(spec)
+            spec.loader.exec_module(client)
+            tmp, text, out = Path(sys.argv[2]), "\\u043f\\u0440\\u0438\\u0432\\u0435\\u0442", {}
+            def attempt(name, fn):
+                try:
+                    out[name] = fn()
+                except Exception as error:
+                    out[name] = type(error).__name__
+            def utf8_json(path, value):
+                path.parent.mkdir(parents=True, exist_ok=True)
+                path.write_bytes(json.dumps(value, ensure_ascii=False).encode("utf-8"))
+            utf8_json(tmp / "providers/neuraldeep/neuraldeep-auth.json", {"api_key": "file-fixture", "name": text})
+            with patch.dict("os.environ", {"CODDY_HOME": str(tmp)}, clear=True):
+                attempt("key", client.resolve_key)
+            utf8_json(tmp / "payload.json", {"query": text})
+            with patch.object(client, "SERVICE", "search"):
+                args = Namespace(payload=str(tmp / "payload.json"), operation="web", file=None, profile="fast")
+                attempt("query", lambda: json.loads(client.submission(args)[2])["query"] == text)
+            state = dict(client.state_template("task-fixture", "ocr"), provider_job_id="job-fixture",
+                         status="timed_out", errors=[text])
+            utf8_json(tmp / "state.json", state)
+            args = Namespace(command="resume", operation="extract", pages=1, profile="fast", payload=None, file=None,
+                             state=str(tmp / "state.json"), output=str(tmp / "result.json"), task_id="task-fixture",
+                             job_id=None, timeout=10)
+            responses = [{"status": "completed"}, (b'{"content": "text"}', "application/json")]
+            with patch.object(client, "SERVICE", "ocr"), patch.object(client, "resolve_key", return_value="fixture"), \\
+                    patch.object(client, "request", side_effect=responses):
+                attempt("resume", lambda: client.execute(args)["status"])
+            print(json.dumps(out))
+        ''')
+        env = {k: v for k, v in os.environ.items() if not k.startswith(("LC_", "PYTHON"))}
+        env.update(LC_ALL="C", LANG="C", PYTHONUTF8="0", PYTHONCOERCECLOCALE="0")
+        with tempfile.TemporaryDirectory() as tmp:
+            run = subprocess.run([sys.executable, "-B", "-c", script, str(SPEC.origin), tmp],
+                                 env=env, capture_output=True, encoding="utf-8")
+        self.assertEqual(run.returncode, 0, run.stderr)
+        self.assertEqual(json.loads(run.stdout), {"key": "file-fixture", "query": True, "resume": "completed"})
 
 
 class FakeHTTPS(urllib.request.HTTPSHandler):
