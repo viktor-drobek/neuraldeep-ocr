@@ -145,3 +145,18 @@ neuraldeep-whisper-1 apart from `SERVICE`. The `SYNCHRONOUS` entry and the
 `submission()` block are not exercised by a test yet. **39 tests passed**, both
 normally and with `LC_ALL=C PYTHONUTF8=0`, with no `EncodingWarning` under
 `-X warn_default_encoding`.
+
+## Malformed resume state and whisper-1 coverage
+
+Ported from neuraldeep-speechcore a9a8073 by way of neuraldeep-whisper-1
+eda8436: `resume` now blocks a state file that is not a JSON object, or whose
+`status` is not a string or `errors` not a list, with "State is not resumable".
+`test_resume_of_malformed_state_is_blocked_not_crashed` failed first in all five
+subtests (four `TypeError`s and one `AttributeError`, since OCR is async).
+`test_whisper_is_synchronous_and_refuses_resume` and
+`test_whisper_run_is_blocked_before_any_request` close the whisper-1 gap noted
+above: removing `whisper` from `SYNCHRONOUS` or the `submission()` block now
+fails a test, checked by mutation in a scratch copy. All three tests are copied
+verbatim from neuraldeep-whisper-1; `scripts/client.py` matches it apart from
+`SERVICE`. **42 tests passed**, both normally and with `LC_ALL=C PYTHONUTF8=0`,
+with no `EncodingWarning` under `-X warn_default_encoding`.
