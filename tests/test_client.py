@@ -99,7 +99,8 @@ class SafetyTests(unittest.TestCase):
 
     def test_http_error_and_post_timeout_not_retried_or_leaked(self):
         from urllib.error import HTTPError, URLError
-        for error in (HTTPError("https://example.com", 503, "secret-fixture", {}, None), URLError("secret-fixture")):
+        for error in (HTTPError("https://example.com", 503, "secret-fixture", {}, None),
+                      HTTPError("https://example.com", 429, "secret-fixture", {"Retry-After": "1"}, None), URLError("secret-fixture")):
             opener = Mock()
             opener.open.side_effect = error
             with self.assertRaises(client.RequestError) as raised:
@@ -373,6 +374,75 @@ class SafetyTests(unittest.TestCase):
                 self.assertEqual(Path(args.state).read_bytes(), before)
                 self.assertFalse(Path(args.output).exists())
 
+    def test_timeout_then_resume_from_saved_state_without_resubmitting(self):
+        png = b"\x89PNG\r\n\x1a\n" + b"0" * 24
+        with tempfile.TemporaryDirectory() as tmp, patch.object(client, "SERVICE", "images"), patch.object(client, "resolve_key", return_value="fixture"), patch.object(client, "preflight", return_value={}) as pre:
+            args = self.args(tmp)
+            # Deadline set at 0; the fifth clock read is past the 10-second timeout.
+            clock = iter([0, 0, 0, 0, 11])
+            with patch.object(client, "request", side_effect=[{"task_uid": "job-fixture"}, {"status": "processing"}]) as req, patch.object(client.time, "monotonic", side_effect=lambda: next(clock)), patch.object(client.time, "sleep"):
+                result = client.execute(args)
+            self.assertEqual(result["status"], "timed_out")
+            self.assertEqual(result["provider_job_id"], "job-fixture")
+            self.assertEqual(result["artifacts"], [])
+            self.assertEqual(req.call_count, 2)
+            self.assertFalse(Path(args.output).exists())
+            saved = json.loads(Path(args.state).read_text(encoding="utf-8"))
+            self.assertEqual((saved["status"], saved["provider_job_id"]), ("timed_out", "job-fixture"))
+
+            args.command = "resume"
+            with patch.object(client, "request", side_effect=[{"status": "finished"}, (png, "image/png")]) as req:
+                result = client.execute(args)
+            self.assertEqual(result["status"], "completed")
+            self.assertEqual([c.args[0] for c in req.call_args_list], ["GET", "GET"])
+            self.assertTrue(req.call_args_list[0].args[1].endswith("/tasks/job-fixture"))
+            self.assertEqual(pre.call_count, 1)
+            self.assertEqual(Path(args.output).read_bytes(), png)
+            self.assertEqual(json.loads(Path(args.state).read_text(encoding="utf-8"))["status"], "completed")
+
+    def test_multipart_body_format(self):
+        content = b"\x89PNG\r\n\x1a\n\x00--not-a-boundary\r\n\r\nbinary"
+        with tempfile.TemporaryDirectory() as tmp:
+            path = Path(tmp) / "private-name.png"
+            path.write_bytes(content)
+            body, content_type = client.multipart(path, "image", {})
+            ocr_body, ocr_type = client.multipart(path, "file", {"model_profile": "pro"})
+        media, boundary = content_type.split("; boundary=")
+        self.assertEqual(media, "multipart/form-data")
+        delimiter = b"--" + boundary.encode()
+        parts = body.split(delimiter)
+        self.assertEqual((len(parts), parts[0], parts[-1]), (3, b"", b"--\r\n"))
+        head, data = parts[1].removeprefix(b"\r\n").split(b"\r\n\r\n", 1)
+        self.assertEqual(head.decode().split("\r\n"), ['Content-Disposition: form-data; name="image"; filename="upload.png"',
+                                                      "Content-Type: application/octet-stream"])
+        self.assertEqual(data, content + b"\r\n")
+        self.assertNotIn(b"private-name", body)
+        ocr_parts = ocr_body.split(b"--" + ocr_type.split("; boundary=")[1].encode())
+        self.assertEqual(ocr_parts[1], b'\r\nContent-Disposition: form-data; name="model_profile"\r\n\r\npro\r\n')
+        self.assertIn(b'name="file"; filename="upload.png"', ocr_parts[2])
+        self.assertNotEqual(boundary, ocr_type.split("; boundary=")[1])
+
+    def test_image_submission_routing(self):
+        with tempfile.TemporaryDirectory() as tmp, patch.object(client, "SERVICE", "images"):
+            args = self.args(tmp)
+            args.payload = str(Path(tmp) / "request.json")
+            Path(args.payload).write_text('{"prompt": "fixture"}', encoding="utf-8")
+            method, url, body, content_type = client.submission(args)
+            self.assertEqual((method, url, json.loads(body), content_type),
+                             ("POST", client.HUB + "/images/generate", {"prompt": "fixture"}, "application/json"))
+            args.operation = "upscale"
+            with self.assertRaises(client.Blocked):
+                client.submission(args)
+            args.file = str(Path(tmp) / "input.png")
+            Path(args.file).write_bytes(b"input-fixture")
+            with self.assertRaises(client.Blocked):
+                client.submission(args)
+            args.payload = None
+            method, url, body, content_type = client.submission(args)
+            self.assertEqual((method, url), ("POST", client.HUB + "/images/upscale"))
+            self.assertTrue(content_type.startswith("multipart/form-data; boundary="))
+            self.assertIn(b'name="image"; filename="upload.png"', body)
+
 
 class FakeHTTPS(urllib.request.HTTPSHandler):
     """Offline HTTPS transport that records requests and replays canned responses."""
@@ -401,7 +471,7 @@ class RequestTests(unittest.TestCase):
     def test_unapproved_origins_are_blocked_before_any_connection(self):
         for url in ("http://api.neuraldeep.ru/v1/limits", "https://evil.example/v1/limits",
                     "https://api.neuraldeep.ru.evil.example/v1/limits", "https://api.neuraldeep.ru:8443/v1/limits",
-                    "https://user@api.neuraldeep.ru/v1/limits"):
+                    "https://user@api.neuraldeep.ru/v1/limits", "file:///etc/passwd"):
             opener = Mock()
             with self.subTest(url=url), self.assertRaises(client.Blocked):
                 client.request("GET", url, "secret-fixture", opener=opener)
