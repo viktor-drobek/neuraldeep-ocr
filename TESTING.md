@@ -124,3 +124,10 @@ patches `SERVICE` to `search` and failed first for all three statuses; a
 matches neuraldeep-search apart from `SERVICE`. **38 tests passed**, both
 normally and with `LC_ALL=C PYTHONUTF8=0`, with no `EncodingWarning` under
 `-X warn_default_encoding`.
+
+`test_resume_of_edited_resumable_state_is_blocked_not_crashed` now also checks
+that the hand-edited state file is left byte-for-byte unchanged. Moving the
+`SYNCHRONOUS` guard into `execute()`'s `try` block let the `Blocked` handler
+overwrite that state while the old test still passed; with the new assertion,
+that mutation fails all three statuses. `scripts/client.py` is unchanged; the
+suite is still **38 tests**.
