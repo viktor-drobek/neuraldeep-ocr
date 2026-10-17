@@ -110,3 +110,17 @@ file with a non-ASCII field was reported as having no credential, and a UTF-8
 read and write text as UTF-8 explicitly. **37 tests passed**, both normally and
 with `LC_ALL=C PYTHONUTF8=0`, with no `EncodingWarning` under
 `-X warn_default_encoding`.
+
+## Synchronous-resume guard
+
+Ported from neuraldeep-search (ac7260d). `resume` of a hand-edited state with
+status `submitted`, `timed_out` or `poll_error` skipped polling for a
+synchronous service and then saved an artifact from unassigned data, raising an
+uncaught `UnboundLocalError` instead of printing the JSON envelope. OCR never
+runs as Search, so this keeps the shared helper identical rather than fixing a
+live crash. `test_resume_of_edited_resumable_state_is_blocked_not_crashed`
+patches `SERVICE` to `search` and failed first for all three statuses; a
+`SYNCHRONOUS` service set now blocks such resumes up front. `scripts/client.py`
+matches neuraldeep-search apart from `SERVICE`. **38 tests passed**, both
+normally and with `LC_ALL=C PYTHONUTF8=0`, with no `EncodingWarning` under
+`-X warn_default_encoding`.
