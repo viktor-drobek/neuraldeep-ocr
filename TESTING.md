@@ -79,5 +79,5 @@ A later regression test showed that `request()` left a caught `HTTPError`
 response open until garbage collection (a `ResourceWarning` on Python 3.14).
 It failed first; the handler now closes the error before raising `RequestError`.
 
-- `python3 -B -m unittest discover -s tests`: **31 tests passed** in this repo.
+- `python3 -B -m unittest discover -s tests`: **32 tests passed** in this repo, including the per-service job-ID test from `main`.
   These additions diverge from the shared 22-test suite in the other service repos.
