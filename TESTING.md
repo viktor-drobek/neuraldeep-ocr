@@ -89,3 +89,14 @@ file extension (`\.[A-Za-z0-9]{1,10}`) in the `filename=` header, so local
 names with quotes, `;` or line breaks cannot inject header text. The
 regression `test_multipart_filename_cannot_inject_headers` failed first
 (4 injection cases); the suite is now **33 tests**.
+
+Ported from neuraldeep-images (beb9533): the 429 case in the HTTP-error test, an extra `file:///` case in the
+origin-allowlist test, and `test_timeout_then_resume_from_saved_state_without_resubmitting`,
+`test_multipart_body_format` and `test_image_submission_routing`. Its origin,
+bearer, redirect and non-resumable-state checks were already covered here by
+stronger OCR tests, so those were not duplicated.
+They pin existing behavior, so they passed on first run; each was checked by a
+targeted mutation of `client.py` in a scratch copy, which it caught. The images
+CI workflow (`.github/workflows/tests.yml`: offline suite and `--help` on Python
+3.10 and 3.x, with no credential in the environment) was copied unchanged; the
+suite is now **36 tests**.
