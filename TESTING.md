@@ -75,5 +75,9 @@ or POST, refusal to resume non-resumable or foreign state, and `request()` throu
 a fake HTTPS transport (origin allowlist, no redirects for 301/302/303/307/308,
 no bearer token on the public prices URL).
 
-- `python3 -B -m unittest discover -s tests`: **30 tests passed** in this repo.
+A later regression test showed that `request()` left a caught `HTTPError`
+response open until garbage collection (a `ResourceWarning` on Python 3.14).
+It failed first; the handler now closes the error before raising `RequestError`.
+
+- `python3 -B -m unittest discover -s tests`: **31 tests passed** in this repo.
   These additions diverge from the shared 22-test suite in the other service repos.
