@@ -102,7 +102,9 @@ python3 scripts/client.py resume --state fast-state.json --output fast-result.js
 {"id": "job_abc123", "status": "pending | processing | completed | failed", ...}
 ```
 
-**Polling interval:** every 1 second.
+**Polling interval:** the helper checks status every 2 seconds until its polling
+deadline; `--timeout` defaults to 120 seconds. Examples that pass `--timeout 300`
+extend that deadline for larger documents.
 
 ---
 
