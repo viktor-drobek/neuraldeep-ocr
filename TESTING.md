@@ -81,3 +81,9 @@ It failed first; the handler now closes the error before raising `RequestError`.
 
 - `python3 -B -m unittest discover -s tests`: **32 tests passed** in this repo, including the per-service job-ID test from `main`.
   These additions diverge from the shared 22-test suite in the other service repos.
+
+Ported from neuraldeep-images: `multipart()` now keeps only an alphanumeric
+file extension (`\.[A-Za-z0-9]{1,10}`) in the `filename=` header, so local
+names with quotes, `;` or line breaks cannot inject header text. The
+regression `test_multipart_filename_cannot_inject_headers` failed first
+(4 injection cases); the suite is now **33 tests**.
