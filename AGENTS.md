@@ -14,7 +14,7 @@ There are no dependencies to install.
 ## The helper is shared
 
 `scripts/client.py` is kept identical across the neuraldeep-search, -images,
--ocr, -speechcore and -transcriptions repositories, apart from the `SERVICE = ...`
+-ocr, -speechcore, -transcriptions and -diarization repositories, apart from the `SERVICE = ...`
 line. Code paths for other services exist here but run only in tests.
 
 - Do not change behaviour for one service only; a fix belongs in every repo.
