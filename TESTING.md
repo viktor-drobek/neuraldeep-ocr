@@ -205,5 +205,6 @@ the client rule once per session for patch add, update, delete and rename and fo
 narrowed scope, `paths` differing from `globs`, body drift, a missing mirror, a
 dead glob, `.codex/rules.md`, a copied `CLAUDE.md`) each failed a test. The test
 file and `.codex/hooks/` are identical across the neuraldeep-* repositories.
-**58 tests passed**, both normally and with `LC_ALL=C PYTHONUTF8=0`, with no
+With the five transcription-model tests merged in parallel,
+**63 tests passed**, both normally and with `LC_ALL=C PYTHONUTF8=0`, with no
 `EncodingWarning` under `-X warn_default_encoding`.
