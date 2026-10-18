@@ -35,12 +35,16 @@ Use this skill whenever the user needs:
 Python 3.10+ is sufficient; the helper uses only the standard library.
 Run commands from this skill's directory. No `curl`, `jq`, or `httpx` is required.
 
-The helper first reads `api_key` from
-`${CODDY_HOME:-~/.coddy}/providers/neuraldeep/neuraldeep-auth.json`, then falls
-back to `NEURALDEEP_API_KEY` for missing, malformed, null, or empty file values.
-It never prints the key. If neither source works, it returns `blocked`; use
-`coddy providers login neuraldeep` or supply the environment variable securely.
-Do not use `jq -r .api_key` as a presence check: JSON null becomes the string `null`.
+The helper reads the key from `NEURALDEEP_OCR_API_KEY`, this skill's own variable, then
+from the shared `NEURALDEEP_API_KEY`. Each is taken from the environment first,
+then from `${CODDY_HOME:-~/.coddy}/.env`, the file Coddy loads at startup, so
+a key added there works without a restart. A variable may hold several keys
+separated by commas: before a billed request the helper uses the first key
+whose free subscription and quota checks pass, and records its number (never
+the key) in the state, so `resume` uses the same key. The Coddy provider file
+is not read. The helper never prints a key. Without one it returns `blocked`,
+naming the variable: ask the user to add it to `~/.coddy/.env` themselves,
+for example `NEURALDEEP_OCR_API_KEY=sk-...`, never in the chat.
 
 Read [Starter and Relay safety](STARTER_RELAY.md) before submitting work.
 Every billed operation must pass the helper's live subscription, public-price,
