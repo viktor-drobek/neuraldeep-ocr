@@ -184,12 +184,37 @@ print(data["content"])
 - `fast` = 1 page per sheet; `pro` = 2 pages per sheet (higher accuracy).
 - Status polling and result fetching do **not** consume quota.
 
-## Error Handling
+## Error handling
 
-- `401` — invalid key
-- `429` — page quota exhausted
-- `400` — unsupported file format or malformed page_ranges
-- `500`/`503` — stop; reconcile an uncertain submission instead of retrying it
+The helper explains an HTTP error with a fixed text for its status, never the
+provider's response body, and adds `Retry-After` (whole seconds) and `X-Window`
+(`session` or `week`) when the provider sends well-formed values, for example
+`HTTP 429 (quota or rate limit reached); retry after 30 s; window week; no
+automatic retry`. It never retries by itself. What a failure means depends on
+when it happens:
+
+- during the preflight GETs, before anything is billed: `blocked`;
+- on the billed submission: `reconciliation_required`, since the work may have
+  been charged; reconcile with the provider's records, never submit blindly again;
+- while polling an existing job: `poll_error`; resume the same job later.
+
+| Code | What the provider documents | What to do |
+|---|---|---|
+| `400` | Invalid request body, or a request longer than allowed | Fix the input; a billed submission is reconciled first |
+| `401` | Key invalid or revoked, or not subscribed to the model | Check the key in `NEURALDEEP_OCR_API_KEY` (or `NEURALDEEP_API_KEY`) in `~/.coddy/.env` |
+| `408` | Upstream timeout after the provider's own retries | Reconcile a submission; resume a job |
+| `422` | A parameter outside the allowed values | Fix the parameter |
+| `429` | A quota or rate limit; `X-Window` names the session or week window and `Retry-After` the wait | Check the quota with `check`; wait, then decide explicitly |
+| `500` | Internal error; the provider suggests repeating | Reconcile a submission before any new one; resume a job |
+| `502` | Upstream unavailable; usually passes on its own | Reconcile or resume as above |
+| `503` | Temporarily unavailable, with `Retry-After` | Wait; reconcile or resume as above |
+
+Any other status is reported as `HTTP <code>` without a hint. A transport
+failure or an unreadable answer is `Transport or response error`, with the same
+outcomes.
+
+- `400` can also mean an unsupported file format.
+- `429` on OCR means the page quota is spent; `check extract --pages N` shows what is left.
 
 ## Privacy & Security
 
