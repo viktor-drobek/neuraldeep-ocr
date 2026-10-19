@@ -30,6 +30,8 @@ never overwrite a sibling's newer change with an older copy.
 
 ## Safety contract
 
+- Never pass `--wallet-limit` without the user's explicit approval of that amount: a wallet
+  key spends money. `wallet_approval_required` is a question for the user, not an error to fix.
 - Never call a billed endpoint, submit a job or use a real API key in tests or
   while developing. Tests use mocked HTTP and synthetic fixtures only.
 - Fail closed: anything unexpected ends in `blocked`, never in a submission.
