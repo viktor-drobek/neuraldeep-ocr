@@ -14,7 +14,7 @@ There are no dependencies to install.
 ## The helper is shared
 
 `scripts/client.py` is kept identical across the neuraldeep-search, -images,
--ocr, -speechcore and -transcriptions repositories, apart from the `SERVICE = ...`
+-ocr, -speechcore, -transcriptions and -diarization repositories, apart from the `SERVICE = ...`
 line. Code paths for other services exist here but run only in tests.
 
 - Do not change behaviour for one service only; a fix belongs in every repo.
@@ -30,6 +30,8 @@ never overwrite a sibling's newer change with an older copy.
 
 ## Safety contract
 
+- Never pass `--wallet-limit` without the user's explicit approval of that amount: a wallet
+  key spends money. `wallet_approval_required` is a question for the user, not an error to fix.
 - Never call a billed endpoint, submit a job or use a real API key in tests or
   while developing. Tests use mocked HTTP and synthetic fixtures only.
 - Fail closed: anything unexpected ends in `blocked`, never in a submission.
