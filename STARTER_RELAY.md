@@ -50,8 +50,7 @@ wallet-affordable count for the daily and monthly subscription buckets.
 Image generation and processing POSTs return `{task_uid}`, not PNG bytes.
 All operations use `/v1/images/tasks/{uid}` until `finished`, then the binary
 `/result` endpoint. OCR uses `{id}` and `completed`; SpeechCore's documented
-`{task_id}` uses `completed`, but this helper only resumes existing SpeechCore
-jobs. Advertised daily ceilings are not a live budget and cannot unblock uploads.
+`{task_id}` uses `completed`. SpeechCore supports a new wallet upload after explicit cost approval and read-only retrieval of an existing job. Subscription uploads remain blocked without a verified remaining-quota endpoint. Advertised daily ceilings are not a live budget.
 
 ## Run and recover
 
